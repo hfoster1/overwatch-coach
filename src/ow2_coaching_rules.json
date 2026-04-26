@@ -1,0 +1,1361 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "description": "Overwatch 2 stat-based coaching rules engine. Rules are evaluated against a player's per-10-minute stats and win rate. Each rule fires when its condition(s) are met. Rules are grouped by scope: universal (any role), role (tank/damage/support/open), and hero-specific. The engine should select the top N highest-priority firing rules, deduplicate by 'category', and render title/why/drill as coaching output.",
+    "stat_keys": {
+      "deathsPer10": "Deaths per 10 minutes",
+      "elimsPer10": "Eliminations per 10 minutes",
+      "finalBlowsPer10": "Final blows (solo kills) per 10 minutes",
+      "healingPer10": "Healing done per 10 minutes",
+      "damagePer10": "Hero damage done per 10 minutes",
+      "critAcc": "Critical hit accuracy (0–1 float, e.g. 0.22 = 22%)",
+      "winrate": "Win rate (0–1 float)",
+      "gamesPlayed": "Total competitive games played this season"
+    },
+    "ranks": ["bronze", "silver", "gold", "platinum", "diamond", "master", "grandmaster", "champion"],
+    "rank_tiers": {
+      "low": ["bronze", "silver"],
+      "mid": ["gold", "platinum"],
+      "high": ["diamond", "master", "grandmaster", "champion"]
+    },
+    "priority_levels": {
+      "critical": 100,
+      "high": 75,
+      "medium": 50,
+      "low": 25
+    },
+    "operator_reference": {
+      ">": "greater than",
+      "<": "less than",
+      ">=": "greater than or equal to",
+      "<=": "less than or equal to",
+      "==": "equal to",
+      "between": "inclusive range [min, max]"
+    }
+  },
+
+  "rank_baselines": {
+    "_note": "Approximate per-10-min stat baselines by rank tier, used to contextualise whether a stat is notably low or high. Derived from community data and Blizzard career profile averages. Not exact — treat as indicative ranges.",
+    "support": {
+      "healingPer10": {
+        "bronze":       { "low": 3000, "avg": 5000,  "high": 7000 },
+        "silver":       { "low": 4000, "avg": 6000,  "high": 8500 },
+        "gold":         { "low": 5000, "avg": 7000,  "high": 9500 },
+        "platinum":     { "low": 6000, "avg": 8000,  "high": 11000 },
+        "diamond":      { "low": 7000, "avg": 9500,  "high": 13000 },
+        "master":       { "low": 9000, "avg": 11000, "high": 15000 },
+        "grandmaster":  { "low": 10000,"avg": 13000, "high": 18000 }
+      },
+      "deathsPer10": {
+        "bronze":       { "low": 3,  "avg": 7,  "high": 12 },
+        "silver":       { "low": 3,  "avg": 6,  "high": 10 },
+        "gold":         { "low": 2,  "avg": 5,  "high": 8  },
+        "platinum":     { "low": 2,  "avg": 4,  "high": 7  },
+        "diamond":      { "low": 1,  "avg": 3,  "high": 5  },
+        "master":       { "low": 1,  "avg": 2.5,"high": 4  },
+        "grandmaster":  { "low": 1,  "avg": 2,  "high": 3.5 }
+      },
+      "elimsPer10": {
+        "bronze":       { "low": 2,  "avg": 5,  "high": 9  },
+        "silver":       { "low": 3,  "avg": 6,  "high": 11 },
+        "gold":         { "low": 4,  "avg": 7,  "high": 13 },
+        "platinum":     { "low": 5,  "avg": 9,  "high": 15 },
+        "diamond":      { "low": 6,  "avg": 11, "high": 18 },
+        "master":       { "low": 7,  "avg": 13, "high": 20 },
+        "grandmaster":  { "low": 8,  "avg": 15, "high": 22 }
+      }
+    },
+    "tank": {
+      "damagePer10": {
+        "bronze":       { "low": 3000, "avg": 5500,  "high": 9000  },
+        "silver":       { "low": 4000, "avg": 6500,  "high": 10000 },
+        "gold":         { "low": 5000, "avg": 8000,  "high": 12000 },
+        "platinum":     { "low": 6000, "avg": 9500,  "high": 14000 },
+        "diamond":      { "low": 7000, "avg": 11000, "high": 16000 },
+        "master":       { "low": 8000, "avg": 13000, "high": 18000 },
+        "grandmaster":  { "low": 9000, "avg": 15000, "high": 22000 }
+      },
+      "deathsPer10": {
+        "bronze":       { "low": 3,  "avg": 8,  "high": 14 },
+        "silver":       { "low": 3,  "avg": 7,  "high": 12 },
+        "gold":         { "low": 2,  "avg": 6,  "high": 10 },
+        "platinum":     { "low": 2,  "avg": 5,  "high": 8  },
+        "diamond":      { "low": 1,  "avg": 4,  "high": 6  },
+        "master":       { "low": 1,  "avg": 3,  "high": 5  },
+        "grandmaster":  { "low": 1,  "avg": 2.5,"high": 4  }
+      },
+      "elimsPer10": {
+        "bronze":       { "low": 3,  "avg": 7,  "high": 12 },
+        "silver":       { "low": 4,  "avg": 9,  "high": 14 },
+        "gold":         { "low": 5,  "avg": 11, "high": 17 },
+        "platinum":     { "low": 6,  "avg": 13, "high": 20 },
+        "diamond":      { "low": 7,  "avg": 15, "high": 23 },
+        "master":       { "low": 8,  "avg": 17, "high": 25 },
+        "grandmaster":  { "low": 9,  "avg": 19, "high": 28 }
+      }
+    },
+    "damage": {
+      "damagePer10": {
+        "bronze":       { "low": 4000,  "avg": 7000,  "high": 11000 },
+        "silver":       { "low": 5000,  "avg": 8000,  "high": 13000 },
+        "gold":         { "low": 6000,  "avg": 10000, "high": 15000 },
+        "platinum":     { "low": 7000,  "avg": 12000, "high": 18000 },
+        "diamond":      { "low": 9000,  "avg": 14000, "high": 21000 },
+        "master":       { "low": 11000, "avg": 16000, "high": 24000 },
+        "grandmaster":  { "low": 13000, "avg": 18000, "high": 28000 }
+      },
+      "elimsPer10": {
+        "bronze":       { "low": 4,  "avg": 9,  "high": 15 },
+        "silver":       { "low": 5,  "avg": 11, "high": 18 },
+        "gold":         { "low": 6,  "avg": 13, "high": 21 },
+        "platinum":     { "low": 7,  "avg": 15, "high": 24 },
+        "diamond":      { "low": 9,  "avg": 18, "high": 27 },
+        "master":       { "low": 11, "avg": 21, "high": 30 },
+        "grandmaster":  { "low": 13, "avg": 24, "high": 34 }
+      },
+      "finalBlowsPer10": {
+        "bronze":       { "low": 1,  "avg": 4,  "high": 8  },
+        "silver":       { "low": 2,  "avg": 5,  "high": 9  },
+        "gold":         { "low": 2,  "avg": 6,  "high": 11 },
+        "platinum":     { "low": 3,  "avg": 8,  "high": 13 },
+        "diamond":      { "low": 4,  "avg": 10, "high": 16 },
+        "master":       { "low": 5,  "avg": 12, "high": 18 },
+        "grandmaster":  { "low": 6,  "avg": 14, "high": 21 }
+      },
+      "deathsPer10": {
+        "bronze":       { "low": 3,  "avg": 8,  "high": 14 },
+        "silver":       { "low": 2,  "avg": 7,  "high": 12 },
+        "gold":         { "low": 2,  "avg": 6,  "high": 10 },
+        "platinum":     { "low": 1,  "avg": 5,  "high": 8  },
+        "diamond":      { "low": 1,  "avg": 4,  "high": 6  },
+        "master":       { "low": 1,  "avg": 3,  "high": 5  },
+        "grandmaster":  { "low": 0,  "avg": 2.5,"high": 4  }
+      },
+      "critAcc": {
+        "_note": "Hitscan heroes only (Cassidy, Soldier, Ashe, Sojourn). Projectile heroes like Hanzo/Junkrat show scoped accuracy which is a different metric.",
+        "bronze":       { "low": 0.05, "avg": 0.15, "high": 0.28 },
+        "silver":       { "low": 0.08, "avg": 0.18, "high": 0.32 },
+        "gold":         { "low": 0.10, "avg": 0.22, "high": 0.36 },
+        "platinum":     { "low": 0.12, "avg": 0.26, "high": 0.40 },
+        "diamond":      { "low": 0.15, "avg": 0.30, "high": 0.44 },
+        "master":       { "low": 0.18, "avg": 0.34, "high": 0.48 },
+        "grandmaster":  { "low": 0.20, "avg": 0.38, "high": 0.52 }
+      }
+    }
+  },
+
+  "rules": {
+
+    "universal": [
+      {
+        "id": "univ_very_low_winrate",
+        "scope": "universal",
+        "category": "winrate",
+        "priority": "critical",
+        "condition": {
+          "stat": "winrate",
+          "op": "<",
+          "value": 0.40
+        },
+        "min_games": 5,
+        "title": "Win Rate Is a Systemic Problem",
+        "why": "Below 40% win rate over 15+ games indicates a recurring issue rather than variance — you're consistently giving the enemy team more than they give you. This is almost never about aim; it's about decision-making, positioning, or target priority.",
+        "drill": "Before each fight, ask yourself: 'Does my team have the numbers and resources to win this right now?' If the answer is no, reset rather than forcing it. One avoided bad fight is worth more than one won good fight.",
+        "vod_cue": "Watch for the moment before each lost fight begins — identify which player committed first and whether it was justified. Most losses can be traced to one early commitment that put the team in a 4v5 or worse."
+      },
+      {
+        "id": "univ_low_winrate",
+        "scope": "universal",
+        "category": "winrate",
+        "priority": "high",
+        "condition": {
+          "stat": "winrate",
+          "op": "between",
+          "value": [0.40, 0.46]
+        },
+        "min_games": 5,
+        "title": "Marginally Losing More Than Winning",
+        "why": "A 40–46% win rate over a meaningful sample means you're close to the line but consistently on the wrong side of it. The gap is likely one or two repeatable mistakes rather than a wholesale skill deficit.",
+        "drill": "Pick one concrete thing to fix per session — just one. Play 5 games focused entirely on that. 'Don't die before the first fight starts' or 'always have cover within two steps' are examples.",
+        "vod_cue": "Review the first death in each lost game. Is there a pattern in where you were or what you were doing?"
+      },
+      {
+        "id": "univ_high_deaths_universal",
+        "scope": "universal",
+        "category": "survival",
+        "priority": "high",
+        "condition": {
+          "stat": "deathsPer10",
+          "op": ">",
+          "value": 10
+        },
+        "title": "You Are Dying Too Frequently",
+        "why": "Dying removes you from the fight and gives the enemy an ult charge bump. More than 10 deaths per 10 minutes across any role suggests you are consistently out of position or committing to losing situations.",
+        "drill": "Set a personal rule: before moving to a new position, look back and confirm your escape route. If there isn't one, don't go there. Use this as a check-in every time you're about to push forward.",
+        "vod_cue": "Watch the 10 seconds before each death — were you out of cover, out of position relative to your team, or making an aggressive play without enough support?"
+      },
+      {
+        "id": "univ_high_elims_low_winrate",
+        "scope": "universal",
+        "category": "macro",
+        "priority": "high",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "elimsPer10", "op": ">", "value": 18 },
+            { "stat": "winrate", "op": "<", "value": 0.48 }
+          ]
+        },
+        "min_games": 5,
+        "title": "High Elims, Low Win Rate — Wrong Targets",
+        "why": "Lots of eliminations with a sub-48% win rate is the classic sign of farming the wrong targets. You're likely winning small duels but not taking out the players who determine the fight outcome (enemy support, priority DPS, or a fed tank).",
+        "drill": "For the next 5 games, commit to calling out the first target before each fight and only switching off that target once they retreat or die. Say it out loud or ping it.",
+        "vod_cue": "On each eliminated enemy, note their role and health pool at the moment of kill. If you're mostly killing flankers who came to you rather than hunting primary threats, this confirms the pattern."
+      },
+      {
+        "id": "univ_low_final_blows",
+        "scope": "universal",
+        "category": "trading",
+        "priority": "medium",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "elimsPer10", "op": ">", "value": 10 },
+            { "stat": "finalBlowsPer10", "op": "<", "value": 3 }
+          ]
+        },
+        "title": "Assists Without Kills — Damage Without Completion",
+        "why": "High elims but very low final blows means you're contributing damage but not finishing targets. Enemies escape at low health and are healed back to full, wasting your damage. This often means you're not coordinating burst with a teammate, or you're switching targets too early.",
+        "drill": "When an enemy drops below roughly 100 HP, commit to finishing them before switching — even if another target appears. Practice the 'last hit discipline' for a full session.",
+        "vod_cue": "Look for moments where you swap off a low-health target. How often did that target get healed back to full in the next 3 seconds?"
+      }
+    ],
+
+    "tank": [
+      {
+        "id": "tank_very_high_deaths",
+        "scope": "tank",
+        "category": "survival",
+        "priority": "critical",
+        "condition": {
+          "stat": "deathsPer10",
+          "op": ">",
+          "value": 9
+        },
+        "title": "Dying Too Fast as Tank",
+        "why": "Tank is the fight anchor — when you die, your team loses their frontline and usually loses the fight. More than 9 deaths per 10 minutes suggests you're taking fights your supports can't sustain, overextending past cover, or not reading when to back off.",
+        "drill": "Use the 'two-second rule': before stepping out of cover, check your health and confirm your supports have line-of-sight to you. If you're below 50% HP and out of major cooldowns, back off rather than committing.",
+        "vod_cue": "Before each death, identify whether your supports had LOS to you. If they didn't, that's a positioning error. If they did but couldn't sustain you, that's a fight timing issue."
+      },
+      {
+        "id": "tank_low_damage",
+        "scope": "tank",
+        "category": "impact",
+        "priority": "high",
+        "condition": {
+          "stat": "damagePer10",
+          "op": "<",
+          "value": 5000
+        },
+        "title": "Not Creating Enough Pressure",
+        "why": "As a solo tank, your threat level forces enemy repositioning and cooldown usage. Under 5000 damage per 10 minutes means you're not pressuring the enemy enough — they can ignore you and focus your team.",
+        "drill": "Pick one off-angle per map section and commit to applying pressure from it with your weapon every time you have cover. The goal isn't kills — it's forcing enemies to react to you.",
+        "vod_cue": "Watch your replays with the enemy tank highlighted. Are they freely healing up and repositioning while you're playing passively? That's the gap you need to close."
+      },
+      {
+        "id": "tank_low_elims_high_survival",
+        "scope": "tank",
+        "category": "passivity",
+        "priority": "medium",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "elimsPer10", "op": "<", "value": 7 },
+            { "stat": "deathsPer10", "op": "<", "value": 4 }
+          ]
+        },
+        "title": "Playing Too Safe — Survivng but Not Leading",
+        "why": "Low deaths and low elims is the tank equivalent of hiding. You're staying alive but not creating space or pressure. At higher ranks this gets punished because the enemy team can just play around you.",
+        "drill": "Identify the two best windows to step up and apply pressure in each fight — usually when an enemy ability comes down or when your supports have a cooldown available. Step up in those windows, then back to cover.",
+        "vod_cue": "Rewatch fights at 0.5x speed. Count how many seconds per fight you spend behind full cover versus actively contesting space. Aim for at least 30% of fight time pressuring."
+      },
+      {
+        "id": "tank_high_deaths_low_damage",
+        "scope": "tank",
+        "category": "overextension",
+        "priority": "critical",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "deathsPer10", "op": ">", "value": 8 },
+            { "stat": "damagePer10", "op": "<", "value": 7000 }
+          ]
+        },
+        "title": "Dying Without Creating Value",
+        "why": "Dying a lot AND doing low damage is the worst possible tank pattern — you're giving the enemy ult charge and not punishing them for it. This often means you're being caught out of position rather than making aggressive plays.",
+        "drill": "For 5 games, only step forward when you have at least one support actively looking at you. If both supports are healing the DPS or not in LOS, hold your position.",
+        "vod_cue": "On each death, note the position on the minimap. Are you dying in the same kinds of spots? Overextended around a corner without cover is the most common pattern."
+      },
+      {
+        "id": "tank_peel_awareness",
+        "scope": "tank",
+        "category": "team_protection",
+        "priority": "medium",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "deathsPer10", "op": ">", "value": 5 },
+            { "stat": "winrate", "op": "<", "value": 0.48 }
+          ]
+        },
+        "title": "Not Rotating Back to Protect Supports",
+        "why": "Low win rate with meaningful deaths is often caused by tank players who push without checking whether their backline is safe. A support death usually results in a lost fight even if the tank is winning their 1v1.",
+        "drill": "Every 15–20 seconds in-fight, glance at your supports' health bars. If either is below 60%, stop your current engagement and make yourself between the threat and your support until they're stabilised.",
+        "vod_cue": "Watch every lost fight from the perspective of your support's health. How often did a support die before you did? That's your peel failure rate."
+      },
+      {
+        "id": "tank_ult_timing",
+        "scope": "tank",
+        "category": "ult_economy",
+        "priority": "medium",
+        "condition": {
+          "stat": "winrate",
+          "op": "<",
+          "value": 0.46
+        },
+        "min_games": 5,
+        "title": "Ult Timing and Fight Initiation",
+        "why": "Most tank ults are fight-starters or space-creators, not finishers. Using them late in a fight (when the team is already behind or already winning without it) wastes most of the value. The enemy should be reacting to your ult, not you reacting to theirs.",
+        "drill": "As you charge your ult, mentally rehearse the exact scenario you want to use it in — which enemy ult does it counter, or which position does it let you take? Having a pre-planned use prevents panic-ulting.",
+        "vod_cue": "Review every ult usage. Was the fight already decided before you used it? Or did it create the fight? Most sub-50% win rate tanks ult reactively rather than proactively."
+      },
+      {
+        "id": "tank_hero_pool_rigidity",
+        "scope": "tank",
+        "category": "adaptability",
+        "priority": "low",
+        "condition": {
+          "stat": "gamesPlayed",
+          "op": ">",
+          "value": 30
+        },
+        "title": "Expand Hero Pool for Counter-Swaps",
+        "why": "Every tank gets hard countered by certain enemies and certain maps. Having only one hero in the pool means there will be situations where you're simply at a mechanical disadvantage with no recourse.",
+        "drill": "Identify your main tank's two hardest counters (e.g. Pharah into Reinhardt, Reaper into Winston). Learn one alternative tank that handles those counters better and play it in quick play until you can swap mid-match comfortably.",
+        "vod_cue": "In every match you lost badly, note the enemy team composition at the point the game felt unwinnable. Is there a hero swap that would have changed the outcome?"
+      }
+    ],
+
+    "damage": [
+      {
+        "id": "dps_very_high_deaths",
+        "scope": "damage",
+        "category": "survival",
+        "priority": "critical",
+        "condition": {
+          "stat": "deathsPer10",
+          "op": ">",
+          "value": 9
+        },
+        "title": "Dying Before You Can Deal Damage",
+        "why": "DPS dying frequently is the fastest way to lose fights — you remove your team's damage output and give the enemy free ult charge. More than 9 deaths per 10 minutes almost always points to aggressive positioning without enough cover or support.",
+        "drill": "Before peeking any angle, identify where you will go if you take significant damage in the first second. If there's no clear answer, find a different angle with a real retreat path.",
+        "vod_cue": "Pause on the frame you commit to each peek. Was there cover within 2 steps? Was your support in LOS? If the answer to both is no, that peek shouldn't have happened."
+      },
+      {
+        "id": "dps_low_damage_any_rank",
+        "scope": "damage",
+        "category": "output",
+        "priority": "high",
+        "condition": {
+          "stat": "damagePer10",
+          "op": "<",
+          "value": 6000
+        },
+        "title": "Damage Output Is Too Low",
+        "why": "Under 6000 damage per 10 minutes for a DPS hero means you're not pressuring the enemy team enough to force them to play defensively or burn cooldowns. The team relies on your damage to win fights.",
+        "drill": "Identify one repeatable angle on each map you practice and take it every fight during warm-up. Volume of shots on target is the simplest output lever — you can't deal damage from behind full cover.",
+        "vod_cue": "Count the seconds you spend in cover versus applying pressure. If you're spending more than 60% of fight time in cover without peeking, that's the gap."
+      },
+      {
+        "id": "dps_low_crit_hitscan",
+        "scope": "damage",
+        "category": "mechanics",
+        "priority": "high",
+        "condition": {
+          "stat": "critAcc",
+          "op": "<",
+          "value": 0.15
+        },
+        "heroes": ["cassidy", "soldier-76", "ashe", "sojourn", "widowmaker"],
+        "title": "Critical Accuracy Is Below Baseline",
+        "why": "Hitscan DPS heroes deal 2x damage on headshots. Below 15% crit accuracy means you're hitting mostly body shots, leaving up to 50% of your potential damage on the table. At this level, aim is the limiting factor.",
+        "drill": "Spend 10 minutes in the practice range before each session. Alternate between tracking smoothly on the dummy's head and flick-clicking to headshots from static positions. Focus on the headshot specifically, not general accuracy.",
+        "vod_cue": "During review, watch where your crosshair sits between shots. If it drops to chest or feet during burst, that's a recoil control issue. If it never reaches the head on the initial flick, that's a placement issue."
+      },
+      {
+        "id": "dps_high_deaths_low_fb",
+        "scope": "damage",
+        "category": "trading",
+        "priority": "critical",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "deathsPer10", "op": ">", "value": 7 },
+            { "stat": "finalBlowsPer10", "op": "<", "value": 4 }
+          ]
+        },
+        "title": "Dying More Than You're Killing",
+        "why": "More than 7 deaths per 10 minutes and fewer than 4 final blows means you are consistently losing your individual trades. The enemy team is getting more resource (ult charge, numbers advantage) from killing you than you are from your engagements.",
+        "drill": "For 5 games, only take a fight if you can see your target's full body and you have cover to retreat to. No blind corners, no wide peeks into unknown targets. Commit only when the trade is in your favour.",
+        "vod_cue": "Timestamp every death and every final blow. Is the ratio getting worse in later rounds of a map? That suggests you're taking worse trades as fights progress rather than learning the enemy's patterns."
+      },
+      {
+        "id": "dps_target_priority",
+        "scope": "damage",
+        "category": "macro",
+        "priority": "high",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "elimsPer10", "op": ">", "value": 12 },
+            { "stat": "winrate", "op": "<", "value": 0.48 }
+          ]
+        },
+        "min_games": 5,
+        "title": "Eliminating the Wrong Targets",
+        "why": "Many elims but a sub-48% win rate strongly suggests target priority issues. You're likely eliminating whoever you can reach rather than whoever matters most. Removing an enemy support or priority carry changes a fight; removing a tank often doesn't.",
+        "drill": "Before each fight, verbally (or mentally) identify: 'The highest value target right now is [X].' Commit your attention and cooldowns to that target first. Enemy supports are almost always the right first call.",
+        "vod_cue": "For each fight, check which enemy died first. Was it a support or a DPS? If you're consistently killing tanks first, that's a target priority pattern to break."
+      },
+      {
+        "id": "dps_off_angle_discipline",
+        "scope": "damage",
+        "category": "positioning",
+        "priority": "medium",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "deathsPer10", "op": ">", "value": 6 },
+            { "stat": "damagePer10", "op": ">", "value": 8000 }
+          ]
+        },
+        "title": "Good Damage but Over-Committing Off-Angles",
+        "why": "Dealing solid damage but dying frequently suggests you're finding angles and putting out pressure, but pushing too far or staying too long once spotted. Good off-angle discipline means hitting the angle, doing damage, then retreating before the enemy coordinates onto you.",
+        "drill": "Set a 2-second timer in your head once you're spotted on an off-angle. If you haven't dealt significant damage or forced a retreat by then, fall back. An off-angle loses its value once the enemy knows you're there.",
+        "vod_cue": "On each off-angle death, identify how many enemy players were shooting at you at the moment you died. If it's more than one, you stayed too long."
+      },
+      {
+        "id": "dps_hero_swapping",
+        "scope": "damage",
+        "category": "adaptability",
+        "priority": "medium",
+        "condition": {
+          "stat": "winrate",
+          "op": "<",
+          "value": 0.46
+        },
+        "min_games": 5,
+        "title": "Hero Pool Limits Counter-Play",
+        "why": "DPS heroes have hard counters built into the game. Playing one hero in all situations means some enemy compositions have a structural advantage you can't overcome without swapping. Most low win rates have a 'kryptonite' hero-pool gap.",
+        "drill": "Identify which enemy hero or composition most consistently causes you to lose fights. Find one hero that counters it and play them in quick play until you can swap confidently in 20 seconds mid-match.",
+        "vod_cue": "At the start of each lost game, identify when the game first felt out of control. Was there an enemy hero that your pick couldn't deal with? That's your pool gap."
+      },
+      {
+        "id": "dps_low_fb_mid_elims",
+        "scope": "damage",
+        "category": "execution",
+        "priority": "medium",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "elimsPer10", "op": "between", "value": [8, 15] },
+            { "stat": "finalBlowsPer10", "op": "<", "value": 3 }
+          ]
+        },
+        "title": "Letting Targets Get Away at Low Health",
+        "why": "Decent elims but very few final blows means you're consistently getting enemies to low health but not finishing them — they get healed or retreat. This creates a situation where you deal the same damage twice to kill one target.",
+        "drill": "When an enemy drops to roughly 100–150 HP, switch to body shots in rapid succession rather than trying for headshots. At that HP range, raw hit rate matters more than crit potential.",
+        "vod_cue": "Watch for the moment a low-health enemy retreats behind cover. Did you push after them or let them go? If you let go, did they return to full health and come back?"
+      }
+    ],
+
+    "support": [
+      {
+        "id": "sup_very_high_deaths",
+        "scope": "support",
+        "category": "survival",
+        "priority": "critical",
+        "condition": {
+          "stat": "deathsPer10",
+          "op": ">",
+          "value": 7
+        },
+        "title": "Dying Too Often as Support",
+        "why": "Support deaths are uniquely punishing — you remove both healing and utility simultaneously, and your absence snowballs fights into losses quickly. More than 7 deaths per 10 minutes almost always indicates positioning that's too aggressive, too exposed to flankers, or too close to the frontline without escape.",
+        "drill": "Before any fight starts, locate the two nearest pieces of cover you can reach in under 1.5 seconds. Mental note: 'if pressured, I go there.' Do this every single fight as a habit.",
+        "vod_cue": "On each death, identify the attacker and their approach route. Is it always the same hero archetype (Winston, Genji, Tracer)? That pattern tells you which flank to watch."
+      },
+      {
+        "id": "sup_high_deaths_mid",
+        "scope": "support",
+        "category": "survival",
+        "priority": "high",
+        "condition": {
+          "stat": "deathsPer10",
+          "op": "between",
+          "value": [5, 7]
+        },
+        "ranks": ["gold", "platinum"],
+        "title": "Dying Too Much for Your Rank",
+        "why": "5–7 deaths per 10 minutes is above average for Gold/Platinum supports. At this rank, dying frequently is the #1 barrier to climbing — it removes your healing from the fight and gives the enemy team ult charge.",
+        "drill": "Play 5 games where your primary goal is simply not dying. Let some healing opportunities go rather than over-commit. Survival first, output second — you can't heal from spawn.",
+        "vod_cue": "Before each death in your review, ask: was I in a safe position 5 seconds ago? Trace how you ended up there."
+      },
+      {
+        "id": "sup_very_low_healing",
+        "scope": "support",
+        "category": "output",
+        "priority": "high",
+        "condition": {
+          "stat": "healingPer10",
+          "op": "<",
+          "value": 4000
+        },
+        "title": "Healing Output Is Very Low",
+        "why": "Under 4000 healing per 10 minutes suggests you're spending fight time hiding, dead, or primarily dealing damage at the expense of your core function. Exceptions apply for Zenyatta and Lucio whose throughput is inherently lower.",
+        "drill": "During fights, keep your healing target's HP bar in peripheral vision at all times. If it drops below 70%, that becomes your first priority — all other decisions wait.",
+        "vod_cue": "Watch a full fight with your team's HP bars visible. How many times did an ally drop below 50% HP while you weren't actively healing them?"
+      },
+      {
+        "id": "sup_high_healing_low_winrate",
+        "scope": "support",
+        "category": "efficiency",
+        "priority": "high",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "healingPer10", "op": ">", "value": 10000 },
+            { "stat": "winrate", "op": "<", "value": 0.46 }
+          ]
+        },
+        "min_games": 5,
+        "title": "Farming Heals, Not Winning Fights",
+        "why": "Very high healing with a sub-46% win rate is the clearest sign of inefficient healing. You're likely over-healing the tank while DPS and supports go unhealed, or keeping allies alive in fights that were already lost. Healing efficiency — the right target at the right time — matters more than throughput.",
+        "drill": "Prioritise healing in this order: (1) whoever is dying right now, (2) your DPS if they're below 60%, (3) your tank. Tanks have the most HP and are expected to be taking damage — resist the urge to top them off between fights.",
+        "vod_cue": "Review fights where you had high healing but still lost. Who were you healing in the 5 seconds before the fight ended? Was it the player who could have turned the fight if healed?"
+      },
+      {
+        "id": "sup_low_damage_output",
+        "scope": "support",
+        "category": "impact",
+        "priority": "medium",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "elimsPer10", "op": "<", "value": 4 },
+            { "stat": "healingPer10", "op": ">", "value": 6000 }
+          ]
+        },
+        "title": "Healing Without Offensive Pressure",
+        "why": "Supports who never threaten with damage allow enemy DPS to play aggressively without fear of punishment. Your damage output keeps enemies honest, forces them behind cover, and contributes to picks that remove healing pressure from your team.",
+        "drill": "Set a goal of dealing damage in every fight — even one shot at the enemy support counts. When your team is stable (everyone above 80% HP), take 2–3 shots at a visible enemy before returning to healing.",
+        "vod_cue": "Pick one fight per match to focus on your damage output when the team is healthy. Compare whether the enemy retreats when you apply pressure versus when you don't."
+      },
+      {
+        "id": "sup_cooldown_waste",
+        "scope": "support",
+        "category": "ability_usage",
+        "priority": "high",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "deathsPer10", "op": ">", "value": 5 },
+            { "stat": "winrate", "op": "<", "value": 0.48 }
+          ]
+        },
+        "min_games": 5,
+        "title": "Cooldown Timing and Priority",
+        "why": "Most support deaths at this stat profile come from burning defensive cooldowns at the wrong time (using suzu on minor damage, using Sleep Dart on a non-threatening target, using immortality field too early). Each wasted cooldown is a window where you're fully exposed.",
+        "drill": "Mentally assign each of your defensive cooldowns a 'minimum use threshold' — e.g. 'I only Suzu when an ally would die without it' or 'Sleep Dart is for ulting enemies or dive threats, not poking tanks.' Commit to that threshold for a full session.",
+        "vod_cue": "Review every cooldown usage. For each one, ask: was this the best possible use, or could I have waited 5 seconds for a higher-value moment?"
+      },
+      {
+        "id": "sup_ult_passivity",
+        "scope": "support",
+        "category": "ult_economy",
+        "priority": "medium",
+        "condition": {
+          "stat": "winrate",
+          "op": "<",
+          "value": 0.46
+        },
+        "min_games": 5,
+        "title": "Ult Economy and Fight Tempo",
+        "why": "Support ults often determine fight outcomes more than DPS ults. Sound Barrier, Transcendence, and Nano Boost can swing fights that looked lost. Consistently losing at sub-46% often reflects either saving ults too long or using them reactively rather than proactively.",
+        "drill": "Use your ult to start fights you want to win, not to save fights you're already losing. An aggressive Transcendence into a fight you control is worth three reactive ones used when your team is half-dead.",
+        "vod_cue": "Review each ult usage and ask: was my team at an advantage, disadvantage, or even when I pressed it? The highest-value ults are used from even or slight advantage."
+      },
+      {
+        "id": "sup_positioning_too_deep",
+        "scope": "support",
+        "category": "positioning",
+        "priority": "high",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "deathsPer10", "op": ">", "value": 5 },
+            { "stat": "elimsPer10", "op": ">", "value": 8 }
+          ]
+        },
+        "title": "Playing Too Deep — Damage at the Cost of Survival",
+        "why": "High elims and high deaths for a support indicates you're positioned aggressively (getting picks) but getting caught in return. Off-angle play is valid for supports, but the position needs a clear escape route — you're not a DPS who can brawl out of a bad spot.",
+        "drill": "For each off-angle you take, establish an escape first: 'If I take damage, I go here.' Only take the angle if the escape route is clear. Don't take angles that require you to fight your way out.",
+        "vod_cue": "On each death in an aggressive position, was there a clear retreat path you missed, or did you have no route at all? That distinction tells you whether it's a positioning error or a discipline error."
+      }
+    ],
+
+    "open_queue": [
+      {
+        "id": "open_role_flexibility",
+        "scope": "open",
+        "category": "adaptability",
+        "priority": "high",
+        "condition": {
+          "stat": "winrate",
+          "op": "<",
+          "value": 0.48
+        },
+        "min_games": 5,
+        "title": "Recognise What Your Team Is Missing",
+        "why": "Open Queue removes role lock — the biggest skill in this mode is reading your team's hero select and identifying the gap. A team with no tank-class hero loses fights at the point of contact; a team with no sustain healer loses attrition fights.",
+        "drill": "In hero select, look at your team's composition before locking in. Ask: 'What role is missing or doubled up?' Fill the gap, even if it's not your best role, for 3 games and track the win rate change.",
+        "vod_cue": "In losses, identify the composition at the start of the fight. Was the loss mechanical or structural? Structural losses (wrong comp for the fight) require hero swaps, not better play."
+      },
+      {
+        "id": "open_swap_timing",
+        "scope": "open",
+        "category": "adaptability",
+        "priority": "medium",
+        "condition": {
+          "stat": "winrate",
+          "op": "<",
+          "value": 0.46
+        },
+        "min_games": 5,
+        "title": "Knowing When to Swap Heroes",
+        "why": "Open Queue players who one-trick in an unfavourable composition are giving up structural advantages. The game actively rewards mid-match flexibility — but swapping too often also kills ult economy.",
+        "drill": "Set a rule: if you've lost the same point or map section three times in a row, something structural is wrong. That's when to consider a hero change. Before that, adjust your positioning or targeting first.",
+        "vod_cue": "On each map section loss, review whether the problem was: (a) a hero matchup, (b) positioning, or (c) ult disadvantage. Only (a) warrants a hero swap."
+      },
+      {
+        "id": "open_double_support",
+        "scope": "open",
+        "category": "comp_awareness",
+        "priority": "medium",
+        "condition": {
+          "stat": "winrate",
+          "op": "<",
+          "value": 0.46
+        },
+        "title": "Double Support in Open Queue",
+        "why": "Running two support heroes in Open Queue without a dedicated tank-class hero means you have no frontline presence, making it easy for dive or brawl comps to collapse on your team. Open Queue often rewards one tank + one support + three damage over traditional 1-2-2.",
+        "drill": "When you're playing support in open queue and your team has no tank, play a support with self-sustain (Kiriko, Moira, Lucio) rather than a high-value but fragile one (Ana, Zenyatta). Survivability matters more when there's no frontline.",
+        "vod_cue": "At the start of each lost game, screenshot or note the team compositions. Does a pattern emerge around games with no tank anchor?"
+      }
+    ],
+
+    "hero_specific": {
+
+      "ana": [
+        {
+          "id": "ana_low_crit",
+          "category": "mechanics",
+          "priority": "high",
+          "condition": {
+            "stat": "critAcc",
+            "op": "<",
+            "value": 0.20
+          },
+          "title": "Ana: Improve Scoped Shot Accuracy",
+          "why": "Ana's scoped shots deal 75 damage on headshots versus 60 body. More importantly, low shot accuracy wastes the full 3-shot clip and forces longer reload windows — reducing effective healing throughput. Ana's kit is entirely skill-shot dependent.",
+          "drill": "In the practice range, sit at medium range (the equivalent of about 15 metres) and scope in on the stationary target. Before each shot, fully exhale and commit to the head. Do 100 shots focusing on consistent head placement before increasing movement.",
+          "vod_cue": "Watch your scoped shots in slow motion. Does your reticle move to the head before you fire, or are you firing mid-movement? Snap-then-fire is correct; fire-while-aiming is the common error."
+        },
+        {
+          "id": "ana_grenade_timing",
+          "category": "ability_usage",
+          "priority": "high",
+          "condition": {
+            "stat": "winrate",
+            "op": "<",
+            "value": 0.48
+          },
+          "title": "Ana: Biotic Grenade Timing",
+          "why": "Ana's Biotic Grenade is arguably the highest-impact ability in the game on a 10-second cooldown. Its dual function — boosting ally healing AND applying anti-heal — is often underused. Many Ana players use it only offensively (anti-heal) and miss the amplification window on their tank when they need burst healing.",
+          "drill": "For 5 games, consciously decide grenade usage priority before each fight: (1) anti-heal an ulting enemy (Roadhog, Junker Queen, Reaper), (2) anti-heal the enemy tank in a brawl, (3) boost your tank's healing when below 40%. Do not throw it randomly.",
+          "vod_cue": "Check each grenade for: did it hit both an enemy and an ally? If it only hit one side, you left value on the table. Positioning 5 metres closer to the frontline during grenade windows fixes this."
+        },
+        {
+          "id": "ana_sleep_dart_usage",
+          "category": "ability_usage",
+          "priority": "medium",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 5
+          },
+          "title": "Ana: Sleep Dart as a Defensive Tool",
+          "why": "Sleep Dart is Ana's only defensive ability, and many players hold it for offensive plays (interrupting ults) while dying to dive heroes. Sleeping a Winston who just jumped on you is a valid — often optimal — use that buys you time to reposition.",
+          "drill": "Every time a dive hero (Winston, D.Va, Genji, Tracer) reaches you, your first instinct should be: 'Where is my Sleep Dart?' Practice the mental habit of associating dive pressure with Sleep Dart readiness.",
+          "vod_cue": "On each death to a dive hero, was Sleep Dart available? If yes, that's a missed defensive use. If no, when did you last use it and was that use worth more than your life?"
+        },
+        {
+          "id": "ana_nano_boost_targets",
+          "category": "ult_economy",
+          "priority": "medium",
+          "condition": {
+            "stat": "winrate",
+            "op": "<",
+            "value": 0.48
+          },
+          "title": "Ana: Nano Boost Target Priority",
+          "why": "Nano Boost on the wrong target (e.g., a full-health tank who isn't about to engage) is one of the most common Ana mistakes. The ult provides 50% damage boost and 50% damage resistance — it's wasted on targets who aren't actively fighting.",
+          "drill": "Nano Boost priority order: (1) DPS with a charged ult (Genji, Reaper, Soldier), (2) tank diving the enemy backline, (3) a DPS who is about to get a pick opportunity. Never Nano a tank who is playing defensively or retreating.",
+          "vod_cue": "After each Nano, track how many eliminations the boosted hero got in the next 5 seconds. If it's zero, you either chose the wrong target or the wrong timing."
+        }
+      ],
+
+      "kiriko": [
+        {
+          "id": "kiriko_suzu_waste",
+          "category": "ability_usage",
+          "priority": "critical",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 5
+          },
+          "title": "Kiriko: Suzu Discipline",
+          "why": "Protection Suzu has a 14-second cooldown. Using it on minor chip damage (below 20% of an ally's max HP) is the most common Kiriko mistake. With Suzu on cooldown, you have no answer to anti-grenade, earthshatter, or dive burst.",
+          "drill": "Set a mental minimum: 'I only Suzu if an ally would die without it, or if I need to cleanse a specific debuff (anti-heal, discord, hack).' Nothing below that threshold.",
+          "vod_cue": "Review each Suzu usage. Was the ally in immediate lethal danger, or were they just taking some damage? If the latter, that's a wasted cooldown."
+        },
+        {
+          "id": "kiriko_swift_step_timing",
+          "category": "ability_usage",
+          "priority": "medium",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 4
+          },
+          "title": "Kiriko: Swift Step Escape Route",
+          "why": "Swift Step isn't just a healing delivery tool — it provides brief invulnerability on arrival and is your primary escape from dive. Many Kiriko players spend Swift Step proactively and then have no answer when a Winston or Tracer lands on them.",
+          "drill": "Hold Swift Step when a dive hero is alive and uncharged. Use it offensively (delivering heals through walls) only when the dive threat has used their engage cooldown (Winston jumped, Tracer blinked away).",
+          "vod_cue": "On each death as Kiriko, was Swift Step available? If it was available and you died, you missed an escape. If it was on cooldown, review whether the prior use was worth your life."
+        },
+        {
+          "id": "kiriko_kunai_accuracy",
+          "category": "mechanics",
+          "priority": "medium",
+          "condition": {
+            "stat": "elimsPer10",
+            "op": "<",
+            "value": 5
+          },
+          "title": "Kiriko: Kunai Headshot Pressure",
+          "why": "Kiriko's Kunai deal 40 on body, 120 on headshot. A single headshot effectively one-shots squishy targets when combined with a follow-up. Low eliminations often mean you're missing the headshot and failing to threaten the enemy team.",
+          "drill": "In the practice range, practice the Kiriko double-shot — lead a moving target's head by roughly half a hitbox width (Kunai are slow projectiles). Try for 20 consecutive headshots before queuing.",
+          "vod_cue": "Watch 3 fights where you tried to duel an enemy. Were your Kunai on the head or trailing the body? Trailing means you need to pre-aim further ahead of movement direction."
+        }
+      ],
+
+      "mercy": [
+        {
+          "id": "mercy_damage_boost_waste",
+          "category": "ability_usage",
+          "priority": "high",
+          "condition": {
+            "stat": "healingPer10",
+            "op": ">",
+            "value": 9000
+          },
+          "title": "Mercy: Damage Boost Over Healing",
+          "why": "Very high healing on Mercy is often a sign of over-healing — keeping the team at full health rather than boosting DPS when healing isn't needed. Damage boost on a hitscan DPS during a fight does more total team value than topping off a tank at 90% HP.",
+          "drill": "When your whole team is above 80% HP, switch to damage boost on your primary carry. Only switch back to healing beam when someone drops below 70%. Practice this toggle as an active habit.",
+          "vod_cue": "Review the ratio of time on healing beam versus damage boost. A strong Mercy maintains roughly 40–60% damage boost during active fights when the team is stable."
+        },
+        {
+          "id": "mercy_guardian_angel_positioning",
+          "category": "positioning",
+          "priority": "high",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 5
+          },
+          "title": "Mercy: Guardian Angel Target Selection",
+          "why": "Mercy's survivability is entirely dependent on Guardian Angel jump targets. Flying to a teammate who is also in danger (a tank being dove, a DPS in a duel) puts you in the same kill zone. Guardian Angel should take you to the safest, not the nearest, teammate.",
+          "drill": "Before using Guardian Angel, glance at your target's HP and their surroundings. If they're below 50% and being actively shot, find a different target or use Angelic Descent to gain height rather than closing distance.",
+          "vod_cue": "On each death, was your Guardian Angel target also taking fire? If yes, you flew into the danger rather than away from it."
+        },
+        {
+          "id": "mercy_valk_usage",
+          "category": "ult_economy",
+          "priority": "medium",
+          "condition": {
+            "stat": "winrate",
+            "op": "<",
+            "value": 0.46
+          },
+          "title": "Mercy: Valkyrie Timing",
+          "why": "Valkyrie is most valuable at the start of a winning fight (where beam chaining adds up across multiple targets) or to sustain a scramble fight where the team is spread. Using it when two teammates are already dead wastes most of the multi-beam value.",
+          "drill": "Use Valkyrie when: (a) your team is grouped and about to take a fight, or (b) you're being dove and need the superior mobility to survive and sustain. Never use it as a last resort when the fight is already lost.",
+          "vod_cue": "Review each Valk usage. How many unique allies did you beam during its duration? Less than 2 means you used it in a too-sparse situation."
+        }
+      ],
+
+      "lucio": [
+        {
+          "id": "lucio_speed_boost_timing",
+          "category": "ability_usage",
+          "priority": "high",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 4
+          },
+          "title": "Lúcio: Speed Boost Timing",
+          "why": "Lúcio's speed aura is most impactful during engagement and disengagement windows — not passively at all times. Many Lúcio players stay on heal aura during a retreat, when speed would save lives, or stay on speed during a brawl, when heal aura provides more sustained value.",
+          "drill": "Set two cues for aura switching: Switch to speed when your team needs to advance, retreat, or dodge an ult. Switch to heal when the team is stationary in a brawl or recovering between fights. Practice recognising these transitions.",
+          "vod_cue": "In slow motion, watch what aura you're on during each fight phase. Are you on heal while retreating? On speed while stationary in a brawl? Each is leaving value on the table."
+        },
+        {
+          "id": "lucio_sound_barrier_timing",
+          "category": "ult_economy",
+          "priority": "high",
+          "condition": {
+            "stat": "winrate",
+            "op": "<",
+            "value": 0.46
+          },
+          "title": "Lúcio: Sound Barrier Pre-Emption",
+          "why": "Sound Barrier provides temporary shield HP, not healing. It is worthless if used on full-health players and is dramatically more valuable pre-fight (absorbing the first enemy burst) than mid-fight (after allies are already low). Most Sound Barriers are used 5 seconds too late.",
+          "drill": "Sound Barrier should be used when: (a) the enemy has an ult charged that bursts multiple targets (Graviton, Earthshatter, Dragonblade), or (b) your team is about to push into a chokepoint. Track enemy ult charge — call it out when an enemy is near full.",
+          "vod_cue": "After each Sound Barrier, note how much HP the barrier absorbed before it expired. Under 50% absorption means you used it too late or on already-healthy targets."
+        },
+        {
+          "id": "lucio_wallride_positioning",
+          "category": "positioning",
+          "priority": "medium",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 5
+          },
+          "title": "Lúcio: Wall Ride for Safety",
+          "why": "Lúcio's unique survivability is built around vertical positioning and movement. Many Lúcio players stay ground level where they are easy targets for any hero. Wall riding keeps you mobile, unpredictable, and able to boop dive heroes away from your team.",
+          "drill": "Spend 10 minutes in a custom game with only Lúcio learning every wall route on your most-played map. Find the paths that let you transition from supporting the backline to the frontline quickly without hitting the ground.",
+          "vod_cue": "During fights, are you grounded and stationary? Every second you're on the ground and not moving is a second where any enemy can reliably shoot you."
+        }
+      ],
+
+      "baptiste": [
+        {
+          "id": "baptiste_immortality_placement",
+          "category": "ability_usage",
+          "priority": "critical",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 5
+          },
+          "title": "Baptiste: Immortality Field Placement",
+          "why": "Immortality Field is the most powerful sustain ability in the game, but its placement is make-or-break. Throwing it at your feet means enemies can step on it and destroy it; throwing it behind cover means it can't be instantly targeted. Many Baptiste players waste it by placing it too close to enemy sightlines.",
+          "drill": "Place Immortality Field 2–3 metres behind the largest piece of cover in the fight — where allies can retreat to it but enemies can't immediately see and shoot it. Practice this placement in custom games on your main maps.",
+          "vod_cue": "On each Immortality Field usage, how long did it last before it was destroyed? Under 3 seconds means enemy players had direct LOS — place it deeper."
+        },
+        {
+          "id": "baptiste_amp_matrix",
+          "category": "ult_economy",
+          "priority": "high",
+          "condition": {
+            "stat": "winrate",
+            "op": "<",
+            "value": 0.46
+          },
+          "title": "Baptiste: Amplification Matrix Positioning",
+          "why": "Amplification Matrix doubles all damage and healing through it. Its value is entirely dependent on your team's ability to shoot through it. Placing it where your DPS can't reach or where the enemy can avoid it by side-stepping returns almost nothing.",
+          "drill": "Before using Amp Matrix, communicate with your DPS: 'Matrix going at X.' Place it on the angle your hitscan DPS is already shooting from, not where you think they should be. High ground placements are strongest on open sightline maps.",
+          "vod_cue": "After each Amp Matrix, count how many teammates dealt damage through it. One or zero means placement or timing was wrong."
+        }
+      ],
+
+      "zenyatta": [
+        {
+          "id": "zen_discord_priority",
+          "category": "ability_usage",
+          "priority": "high",
+          "condition": {
+            "stat": "elimsPer10",
+            "op": "<",
+            "value": 6
+          },
+          "title": "Zenyatta: Discord Orb Target Priority",
+          "why": "Discord Orb is a 25% damage amplification to all damage — it is Zenyatta's single highest-impact ability. Most Zenyatta players put it on the tank by default, but it's most valuable on the enemy support (high-value, squishy) or on the primary carry (forces them to play safely).",
+          "drill": "Discord target priority: (1) enemy support when visible, (2) enemy DPS making a play, (3) tank as a fallback. Move Discord as soon as your current target is eliminated or retreats — never let it sit on a tank who's behind cover.",
+          "vod_cue": "Watch each Discord Orb placement and note how long it sat on a target who wasn't being focused. Every second of Discord on an untargeted enemy is wasted value."
+        },
+        {
+          "id": "zen_transcendence_timing",
+          "category": "ult_economy",
+          "priority": "high",
+          "condition": {
+            "stat": "winrate",
+            "op": "<",
+            "value": 0.46
+          },
+          "title": "Zenyatta: Transcendence Timing",
+          "why": "Transcendence is a fight-winning ult when countering burst damage compositions (Graviton + Dragon, Death Blossom, Primal Rage). It is wasted on spread damage or poke fights where the healing doesn't concentrate on targets in immediate danger.",
+          "drill": "Track the two highest-burst enemy ults every game (Genji, Reaper, Zarya ult combo) and mentally 'reserve' Transcendence for those. If neither fires before you use it, find the next brawl where the team will take concentrated burst.",
+          "vod_cue": "After each Transcendence, how much total HP did it restore? High healing in a short time window (under 3 seconds) means you caught a burst window. Spread healing over 5+ seconds means you used it in a poke fight."
+        },
+        {
+          "id": "zen_positioning",
+          "category": "positioning",
+          "priority": "high",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 5
+          },
+          "title": "Zenyatta: Positioning and Survival",
+          "why": "Zenyatta has 225 HP with no mobility. Every single death is punishing because his only defensive tool (kick boop) is unreliable against competent dive heroes. Dying frequently as Zenyatta almost always means standing too close to the frontline or not anticipating dive approach angles.",
+          "drill": "Position at the maximum effective range of your Orbs (roughly 12–15 metres behind the point of contact). Know your two nearest right-angle covers — Zenyatta needs corners, not open space. When a dive hero charges, immediately move around a corner and kick on approach.",
+          "vod_cue": "Before each death, note your position on the minimap. Is there a pattern of dying in open space versus dying in covered positions? Open space deaths are pure positioning errors."
+        }
+      ],
+
+      "moira": [
+        {
+          "id": "moira_damage_balance",
+          "category": "impact",
+          "priority": "high",
+          "condition": {
+            "compound": "AND",
+            "conditions": [
+              { "stat": "healingPer10", "op": ">", "value": 12000 },
+              { "stat": "elimsPer10", "op": "<", "value": 5 }
+            ]
+          },
+          "title": "Moira: Balance Damage and Healing",
+          "why": "Moira's orb and damage orb are core to her team value — pure healing Moira provides no offensive pressure and lets the enemy DPS play freely. Very high healing with low elims means you're farming heals without contributing to picking enemies.",
+          "drill": "Every time your team is above 80% HP, throw a damage orb and follow it with right-click damage for 2 seconds. The goal is forcing the enemy support or DPS behind cover, not necessarily getting kills.",
+          "vod_cue": "Review fights from the enemy perspective mentally — are they worried about Moira or ignoring her? If the enemy support is freely walking and healing, your damage threat isn't registering."
+        },
+        {
+          "id": "moira_fade_timing",
+          "category": "ability_usage",
+          "priority": "medium",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 5
+          },
+          "title": "Moira: Fade as Escape, Not Repositioning",
+          "why": "Fade is Moira's only survival tool — a brief invulnerable dash. Many players use it proactively for repositioning and then have no escape when a dive hero or flanker reaches them. With Fade on cooldown, Moira is extremely vulnerable.",
+          "drill": "Only use Fade reactively — save it for when you take significant damage or a dive hero lands on you. If you find yourself using Fade without taking damage, you're using it as a movement tool rather than a survival one.",
+          "vod_cue": "On each death, was Fade available? If it was available and you died, you either forgot it or panicked. If it was on cooldown, when did you last use it and was the prior use worth your life?"
+        }
+      ],
+
+      "brigitte": [
+        {
+          "id": "brig_rally_timing",
+          "category": "ult_economy",
+          "priority": "high",
+          "condition": {
+            "stat": "winrate",
+            "op": "<",
+            "value": 0.46
+          },
+          "title": "Brigitte: Rally Timing and Value",
+          "why": "Rally builds temporary armour on all nearby allies — it's most valuable when your team is grouped and about to engage, not when spread or retreating. Using it defensively (team already dying) builds armour on 1–2 players rather than 4.",
+          "drill": "Use Rally when: (a) your full team is within 10 metres and about to push, or (b) against a specific burst ult (it stacks with Suzu pre-engagement on dive comps). Never use it while retreating.",
+          "vod_cue": "After each Rally, how many allies had full armour stacks? If fewer than 3, your team was too spread or you triggered it too late."
+        },
+        {
+          "id": "brig_shield_bash_usage",
+          "category": "ability_usage",
+          "priority": "medium",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 5
+          },
+          "title": "Brigitte: Shield Bash as a Peel Tool",
+          "why": "Shield Bash stuns for 0.9 seconds — it's the fastest peel tool in the support kit. Many Brigitte players save it for their own duels, but its primary value is stunning dive heroes who land on your other support or your team's DPS.",
+          "drill": "Every time a dive hero (Winston, Genji, Tracer, Sombra) reaches a vulnerable teammate, Shield Bash is your first instinct — before whip shot, before any other action. Practice the association: dive on teammate → Shield Bash.",
+          "vod_cue": "On each dive kill on your team, was Shield Bash available? Could you have bashed the attacker before they finished the kill? That gap is your peel failure rate."
+        }
+      ],
+
+      "reinhardt": [
+        {
+          "id": "rein_shield_management",
+          "category": "ability_usage",
+          "priority": "high",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 7
+          },
+          "title": "Reinhardt: Shield Is a Resource, Not a Default",
+          "why": "Reinhardt's Barrier Field has 1500 HP on a 5-second cooldown after it breaks. Many Rein players hold shield up constantly, getting it broken and then dying with no cover. A broken shield is a resource-depleted state — play conservatively until it regenerates.",
+          "drill": "When shield drops below 500 HP, immediately step back behind hard cover. Don't let the shield break in open space. Once behind cover for 5 seconds, re-engage. Shield health is a resource you manage, not a permanent defense.",
+          "vod_cue": "On each death, was your shield at 0 HP? If yes, trace back to when it broke and whether you immediately retreated. Most Rein deaths happen within 3 seconds of shield break in open space."
+        },
+        {
+          "id": "rein_charge_discipline",
+          "category": "ability_usage",
+          "priority": "high",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 6
+          },
+          "title": "Reinhardt: Charge Into Walls, Not Open Space",
+          "why": "Charge is Reinhardt's highest-damage ability but also his highest-risk. Charging into open space misses and puts you metres out of position with cooldown spent. Charge should almost always target a specific enemy near a wall or corner.",
+          "drill": "Only charge when you can see a wall within 6 metres of the target. Pre-aim toward the wall, then fire. If there's no wall, use Firestrike and wait for a better Charge opportunity.",
+          "vod_cue": "Review each Charge usage. Did the target pin against a wall, or did you miss or carry them into open space? The latter two are wasted Charges."
+        },
+        {
+          "id": "rein_earthshatter_timing",
+          "category": "ult_economy",
+          "priority": "high",
+          "condition": {
+            "stat": "winrate",
+            "op": "<",
+            "value": 0.46
+          },
+          "title": "Reinhardt: Earthshatter Setup",
+          "why": "Earthshatter requires enemies to be on the ground and in LOS to land full value. Using it when the enemy team is spread, behind cover, or has Suzu/Transcendence ready often yields zero kills. High-value Earthshatters are set up — the enemy is grouped, in the open, and key counters are on cooldown.",
+          "drill": "Before using Earthshatter, check: (1) are 2+ enemies visible and on the ground? (2) Is Kiriko Suzu down? (3) Is Zenyatta Transcendence down? Only use it if the answer to all three is yes.",
+          "vod_cue": "Review each Earthshatter and count how many enemies were stunned. Under 2 means it was under-set-up."
+        }
+      ],
+
+      "winston": [
+        {
+          "id": "winston_jump_pack_targets",
+          "category": "ability_usage",
+          "priority": "high",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 7
+          },
+          "title": "Winston: Jumping Into Survivable Targets",
+          "why": "Winston is a dive initiator whose value comes from isolating and eliminating key targets. Jumping onto a Roadhog, Reaper, or any high-sustain target is a death sentence — they out-damage your Tesla Cannon at close range. Winston should always jump onto low-health, mobile-limited targets.",
+          "drill": "Priority target list for Jump Pack: (1) enemy supports (Ana, Zenyatta, Mercy), (2) enemy hitscan DPS in the open, (3) enemy off-angle. Never: tanks, Reaper, Roadhog, or any hero that has been nano-boosted.",
+          "vod_cue": "On each death after jumping, identify the target you jumped onto. Was it in the priority list? High-health targets with burst damage or self-sustain will always win the 1v1 at close range."
+        },
+        {
+          "id": "winston_bubble_timing",
+          "category": "ability_usage",
+          "priority": "high",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 6
+          },
+          "title": "Winston: Barrier Projector Timing",
+          "why": "Winston's bubble is his primary survivability tool. Using it proactively (the second you land on a target) wastes it on full-health enemies and leaves you exposed once it expires. Save it for when you've confirmed the target is isolated and their team is shooting at you.",
+          "drill": "After jumping, deal 3–4 seconds of Tesla Cannon damage before deploying bubble. The bubble's value is protecting you from the enemy response, not from the initial target.",
+          "vod_cue": "On each Barrier Projector usage, how much of it was spent under enemy fire versus before enemies responded? Bubble before being shot at is wasted duration."
+        }
+      ],
+
+      "sigma": [
+        {
+          "id": "sigma_accretion_interrupt",
+          "category": "ability_usage",
+          "priority": "medium",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 6
+          },
+          "title": "Sigma: Accretion for Interrupts, Not Damage",
+          "why": "Sigma's rock stuns for 0.8 seconds — its highest value use is interrupting dangerous abilities or ults (Moira coalescence, Reaper Death Blossom, Genji Dragonblade) rather than as a damage tool. Many Sigma players use it as extra damage output and waste it before a fight-deciding moment.",
+          "drill": "Track the two most dangerous enemy abilities each game and 'reserve' Accretion for interrupting one of them. If neither fires, use it on a grouped fight as an initiator. Don't use it in the first 10 seconds of a fight when the high-value window is still coming.",
+          "vod_cue": "Review each Accretion. Did it interrupt a dangerous ability, or was it used as a regular poke tool? Interrupts are worth 3x more than damage value in most fights."
+        },
+        {
+          "id": "sigma_shield_cooldown",
+          "category": "ability_usage",
+          "priority": "high",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 7
+          },
+          "title": "Sigma: Kinetic Grasp Saving and Shield Cycling",
+          "why": "Sigma's Experimental Barrier and Kinetic Grasp together make him hard to kill when cycled correctly. Many Sigma players have both abilities on cooldown simultaneously, leaving no defense options. Stagger them — when the barrier is recharging, have Grasp available, and vice versa.",
+          "drill": "During fights, alternate: use Barrier → step back while it recharges → use Grasp if pressured → redeploy Barrier once Grasp expires. Never pop both at the same time.",
+          "vod_cue": "Identify each death and check whether both Barrier and Grasp were on cooldown simultaneously. If yes, that's a cooldown management issue — they should never both be unavailable at the same time."
+        }
+      ],
+
+      "dva": [
+        {
+          "id": "dva_matrix_priority",
+          "category": "ability_usage",
+          "priority": "high",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 6
+          },
+          "title": "D.Va: Defense Matrix Target Priority",
+          "why": "Defense Matrix is the most versatile defensive ability in the game — it deletes projectiles, rockets, and hitscan. Many D.Va players use it reactively on whoever is shooting them, rather than proactively on the highest-value incoming ability (Pharah rockets, Ana grenade, Zarya ult).",
+          "drill": "Before each fight, identify the one enemy ability that will lose the fight if it lands (Graviton, rocket barrage, anti-nade). Save at least 40% of Matrix for that ability. Matrix on other threats only if the primary target isn't in play.",
+          "vod_cue": "Review each Matrix usage. What ability did it eat? If it ate basic weapon fire rather than a key ability, that was likely sub-optimal."
+        },
+        {
+          "id": "dva_mech_remech",
+          "category": "ability_usage",
+          "priority": "medium",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 7
+          },
+          "title": "D.Va: Out-of-Mech Survival",
+          "why": "D.Va out-of-mech has 150 HP and a pistol — she is not built to fight. Many D.Va players try to continue fighting out of mech rather than retreating to a safe position to Call Mech. Dying out of mech is a full death with no survivability buffer.",
+          "drill": "The moment you pop out of mech, immediately locate the nearest cover and move to it. Your only goal out of mech is staying alive long enough to Call Mech. Every step toward an enemy out-of-mech is the wrong direction.",
+          "vod_cue": "On each out-of-mech death, how many steps did you take toward the enemy? Any forward movement out of mech without being cornered is a positioning error."
+        }
+      ],
+
+      "tracer": [
+        {
+          "id": "tracer_recall_timing",
+          "category": "ability_usage",
+          "priority": "critical",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 8
+          },
+          "title": "Tracer: Recall as a Survival Ability",
+          "why": "Recall restores full health, removes debuffs, and repositions — it is Tracer's life save. Many Tracer players use Recall proactively (to escape after a trade) rather than reactively (after taking lethal burst). Recall should be triggered when you've taken 100+ HP damage in under 2 seconds, not after a controlled withdrawal.",
+          "drill": "The trigger for Recall is: 'Am I below 60 HP?' If yes, Recall immediately. If no, use Blink to escape instead. Reserve Recall for emergencies only.",
+          "vod_cue": "On each death, was Recall available? If yes, did you have time to press it? Most Tracer deaths at high death rates are either Recall held too long or used too early."
+        },
+        {
+          "id": "tracer_pulse_bomb_targets",
+          "category": "ult_economy",
+          "priority": "high",
+          "condition": {
+            "stat": "winrate",
+            "op": "<",
+            "value": 0.46
+          },
+          "title": "Tracer: Pulse Bomb Target Selection",
+          "why": "Pulse Bomb is unreliable on moving targets and tanks. It's best used on: stationary supports (Ana scoped in, Zenyatta during Transcendence gap, Mercy res), enemies trapped by CC, or within 3 metres of multiple grouped enemies. Sticking a tank with Pulse Bomb usually doesn't kill them and wastes the ult.",
+          "drill": "Practice Pulse Bomb delivery on stationary bots in the practice range from point-blank (less than 2 metres). This is the delivery distance that guarantees a stick. Approach the target during their ability animation when they can't reposition.",
+          "vod_cue": "Review each Pulse Bomb and note: did it stick? If it didn't stick, how far away were you when you threw it? Over 3 metres on a moving target is very low percentage."
+        }
+      ],
+
+      "genji": [
+        {
+          "id": "genji_dragonblade_setup",
+          "category": "ult_economy",
+          "priority": "high",
+          "condition": {
+            "stat": "winrate",
+            "op": "<",
+            "value": 0.46
+          },
+          "title": "Genji: Dragonblade Requires Setup",
+          "why": "Dragonblade is high-risk — Genji has no range and commits to melee distance for 6 seconds. Blading into a team with Ana anti-nade, Kiriko Suzu, or Orisa Fortify active will result in zero kills and a wasted ult. Dragonblade value comes from: Nano Boost amplification, enemy support cooldowns burned, or a confirmed pick that removes their counter.",
+          "drill": "Before using Dragonblade, confirm: (1) Does the enemy have Suzu, immortality, or Transcendence available? If yes, wait or force it out first. (2) Is there a Nano Boost available? Wait for it. (3) Are 2+ enemies grouped within your dash range?",
+          "vod_cue": "Review each Dragonblade. Did you get at least 2 kills? Under 2 kills on a Blade almost always traces back to poor setup — enemy escape tools available or wrong engagement angle."
+        },
+        {
+          "id": "genji_deflect_usage",
+          "category": "ability_usage",
+          "priority": "medium",
+          "condition": {
+            "stat": "deathsPer10",
+            "op": ">",
+            "value": 8
+          },
+          "title": "Genji: Deflect as a Peel Tool",
+          "why": "Deflect lasts 1.5 seconds and reflects hitscan and projectiles. Many Genji players use it purely as a damage tool (reflecting at tanks) rather than as a survival ability (walking toward an enemy support's sightline to deflect their shots and force them into cover).",
+          "drill": "When playing aggressively on an off-angle, plan your retreat through enemy sightlines — activate Deflect just before stepping into their line of fire on the way out. This buys 1.5 seconds of safe movement even through open space.",
+          "vod_cue": "On each death where Deflect was available, could activating Deflect 1 second earlier have let you escape? If yes, you identified a Deflect timing miss."
+        }
+      ],
+
+      "soldier-76": [
+        {
+          "id": "s76_helix_timing",
+          "category": "ability_usage",
+          "priority": "medium",
+          "condition": {
+            "stat": "finalBlowsPer10",
+            "op": "<",
+            "value": 4
+          },
+          "title": "Soldier: 76 — Helix Rocket for Burst Windows",
+          "why": "Helix Rocket deals 120 damage in a burst and has an 8-second cooldown. Many Soldier players use it as soon as it's available for extra damage, rather than holding it for a burst window — when the enemy is below 200 HP and a Helix confirms the kill. The difference between a kill and a retreat.",
+          "drill": "Only fire Helix Rocket when the target is below 200 HP. Practice the damage combo: 3 rifle shots (75 damage) → Helix Rocket (120 damage) → confirm kill with 1–2 more shots. At low gold health this reliably kills any 200 HP squishy.",
+          "vod_cue": "Review each Helix usage. Was the target below 200 HP when you fired it? If they survived and healed up, you used Helix as poke rather than burst."
+        },
+        {
+          "id": "s76_tactical_visor",
+          "category": "ult_economy",
+          "priority": "high",
+          "condition": {
+            "stat": "winrate",
+            "op": "<",
+            "value": 0.46
+          },
+          "title": "Soldier: 76 — Tactical Visor Angles",
+          "why": "Tactical Visor provides aimbot-level accuracy but requires LOS and straight sightlines. Using it in close quarters (where enemies can melee, dash, or get around corners) or against tanks who survive the ult duration wastes its value. The highest value uses are on long sightline maps against grouped soft targets.",
+          "drill": "Use Tactical Visor from high ground or at long range where enemies can't easily reach you. Target priority during Visor: enemy supports first, then squishy DPS. Never target a tank with Visor unless they're already critically low.",
+          "vod_cue": "Review Tactical Visor kills. Were they primarily on supports and DPS, or were you shooting tanks? Time spent on tanks during Visor is time the enemy supports and carries are recovering."
+        }
+      ],
+
+      "cassidy": [
+        {
+          "id": "cassidy_flashbang_combo",
+          "category": "ability_usage",
+          "priority": "high",
+          "condition": {
+            "stat": "finalBlowsPer10",
+            "op": "<",
+            "value": 4
+          },
+          "title": "Cassidy: Magnetic Grenade Combo",
+          "why": "Cassidy's Magnetic Grenade (formerly Flashbang) is a burst damage tool — most effective in combination with a melee or rapid shots on a target with low max HP. Many players throw it at tanks or as standalone poke, missing the high-damage combo window.",
+          "drill": "The Cassidy kill combo on a 200 HP target: Grenade (70 damage) + 2 shots (88 each) = dead. Practice this burst sequence on the practice range target at close-medium range. The grenade's magnetism means you don't need to land it precisely — just close.",
+          "vod_cue": "On each Grenade usage, did it result in an elimination within 3 seconds? If not, was the target a tank (wrong target) or did you not follow through with shots?"
+        }
+      ],
+
+      "sojourn": [
+        {
+          "id": "sojourn_charge_management",
+          "category": "mechanics",
+          "priority": "high",
+          "condition": {
+            "stat": "finalBlowsPer10",
+            "op": "<",
+            "value": 4
+          },
+          "title": "Sojourn: Railgun Charge Windows",
+          "why": "Sojourn's Railgun charges by dealing damage with her primary fire. The charged shot one-taps any 200 HP hero on headshot. Many Sojourn players dump charge on a tank (which soaks it without dying) rather than holding it for a support or off-angle DPS peek.",
+          "drill": "Build charge on the tank, then immediately pivot to scope and shoot an exposed support. The transition should take under 1 second. Practice: 10 primary shots → right-click headshot. Build charge on one target, spend it on another.",
+          "vod_cue": "Review each charged shot. What was the target's role and HP when you fired? Charge spent on a full-health tank is value lost — that charge should have gone to a support."
+        }
+      ]
+    },
+
+    "cross_stat_patterns": [
+      {
+        "id": "pattern_high_heal_high_death",
+        "scope": ["support"],
+        "category": "positioning",
+        "priority": "high",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "healingPer10", "op": ">", "value": 9000 },
+            { "stat": "deathsPer10", "op": ">", "value": 6 }
+          ]
+        },
+        "title": "Healing From Dangerous Positions",
+        "why": "High healing AND high deaths is a specific pattern: you're output-maxxing at the cost of positioning. You're likely standing close to the frontline to maximise healing range, but that exposure is why you're also dying. The net value is negative — your deaths reset fights faster than your heals sustain them.",
+        "drill": "Add 3–5 metres of buffer between yourself and the frontline. Your heals will still reach allies (all supports have 15–30m healing range). Healing 10% less from a safe position beats healing 20% more while also feeding ult charge.",
+        "vod_cue": "Compare your position on the minimap during high-healing moments versus the moment before each death. There will likely be a direct correlation between proximity to the frontline and death events."
+      },
+      {
+        "id": "pattern_low_damage_low_death_dps",
+        "scope": ["damage"],
+        "category": "passivity",
+        "priority": "high",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "damagePer10", "op": "<", "value": 6000 },
+            { "stat": "deathsPer10", "op": "<", "value": 4 }
+          ]
+        },
+        "title": "Playing Too Passive as DPS",
+        "why": "Very low damage AND very low deaths as a DPS means you're staying alive but not contributing to fights. You may be playing safe, but safe for a DPS player is useless — your job is applying pressure that forces enemies to make mistakes.",
+        "drill": "Set a minimum: at least one committed angle per fight phase where you take minimum 3 shots at a target. Do not hide until your team is actively winning — get involved in the fight.",
+        "vod_cue": "Watch one full fight entirely focused on your own position. How many seconds were you behind full cover with no enemy in LOS? Every one of those seconds is passive time."
+      },
+      {
+        "id": "pattern_good_stats_low_winrate",
+        "scope": ["tank", "damage", "support", "open"],
+        "category": "macro",
+        "priority": "high",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "winrate", "op": "<", "value": 0.46 },
+            { "stat": "deathsPer10", "op": "<", "value": 5 },
+            { "stat": "elimsPer10", "op": ">", "value": 10 }
+          ]
+        },
+        "min_games": 5,
+        "title": "Good Individual Stats, Losing Games — Macro Issue",
+        "why": "When your mechanics look solid but games are still being lost, it almost always points to a macro problem: fight timing, ult usage, or hero selection. You're winning your individual duels but the team is losing the map.",
+        "drill": "For 5 games, focus exclusively on: (1) when to take fights (not every fight is worth taking), (2) where the objective is during each fight, and (3) whether your ult is being used on a fight you can actually win. Mechanics are not the issue.",
+        "vod_cue": "Review each lost map. At what point did the game feel unwinnable? Was it a mechanical moment or a strategic one (bad ult trade, took a fight away from the objective, didn't group for a push)?"
+      },
+      {
+        "id": "pattern_tank_no_pressure_high_death",
+        "scope": ["tank"],
+        "category": "fight_mechanics",
+        "priority": "critical",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "damagePer10", "op": "<", "value": 5000 },
+            { "stat": "deathsPer10", "op": ">", "value": 8 },
+            { "stat": "elimsPer10", "op": "<", "value": 8 }
+          ]
+        },
+        "title": "Tank: Dying Without Creating Any Value",
+        "why": "Low damage, low elims, and high deaths as tank is the single most team-damaging stat pattern in the game. You are freely giving the enemy team ult charge without creating space, pressure, or resource depletion in return. This is most commonly caused by overextending without support LOS.",
+        "drill": "For 5 games, never step more than 8–10 metres ahead of your nearest support. If you advance, check over your shoulder first. If neither support has LOS, hold your position until they catch up.",
+        "vod_cue": "On each death, immediately look at where your supports were at the moment you died. If they were out of LOS or more than 15m away, that's an overextension. If they were in LOS and you still died, that's a fight timing issue — the fight wasn't yours to take."
+      },
+      {
+        "id": "pattern_support_high_fb_low_heal",
+        "scope": ["support"],
+        "category": "role_balance",
+        "priority": "medium",
+        "condition": {
+          "compound": "AND",
+          "conditions": [
+            { "stat": "finalBlowsPer10", "op": ">", "value": 5 },
+            { "stat": "healingPer10", "op": "<", "value": 5000 }
+          ]
+        },
+        "title": "Playing DPS, Not Support",
+        "why": "High final blows and low healing as a support means you're prioritising kills over your sustain role. Depending on the hero (Kiriko, Ana), some DPS output is built-in — but final blows above 5/10 with healing under 5000/10 suggests misallocation of attention.",
+        "drill": "Set a check: if any teammate is below 70% HP, your current action pauses and they become the priority. After healing them above 80%, return to offensive play. Consistently apply this loop.",
+        "vod_cue": "During each fight, track how many times an ally dropped below 50% HP while you were shooting at enemies rather than healing them."
+      }
+    ]
+  }
+}
